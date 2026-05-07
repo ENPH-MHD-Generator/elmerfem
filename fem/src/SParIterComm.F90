@@ -184,6 +184,12 @@ CONTAINS
 
     INTEGER :: ierr
     INTEGER :: req, prov
+    INTEGER :: worldGroup, elmerGroup
+    INTEGER :: globalPEs, globalRank
+    INTEGER :: nElmerRanks, elmerStart, stat, ii
+    INTEGER, ALLOCATABLE :: elmerRanks(:)
+    CHARACTER(LEN=32) :: envVal
+    LOGICAL :: useEOFComm
 
     !******************************************************************
 
@@ -223,30 +229,47 @@ CONTAINS
     CALL MPI_COMM_SIZE( MPI_COMM_WORLD, ParEnv % PEs, ierr )
     CALL MPI_COMM_RANK( MPI_COMM_WORLD, ParEnv % MyPE, ierr )
 
-! Use XIOS library for IO
-! Must have xios and iodef.xml present
-#ifdef HAVE_XIOS
-    INQUIRE(FILE="iodef.xml", EXIST=USE_XIOS)
-    IF (USE_XIOS) THEN
-      CALL SetExecID()
-      CALL xios_initialize(TRIM(ExecID),return_comm=ELMER_COMM_WORLD)
-    ELSE
+useEOFComm = .FALSE.
+
+CALL GET_ENVIRONMENT_VARIABLE("EOF_ELMER_RANKS", envVal, STATUS=stat)
+IF (stat == 0) THEN
+  READ(envVal, *) nElmerRanks
+  useEOFComm = .TRUE.
+ELSE
+  nElmerRanks = ParEnv % PEs
+END IF
+
+CALL GET_ENVIRONMENT_VARIABLE("EOF_ELMER_RANKS_START", envVal, STATUS=stat)
+IF (stat == 0) THEN
+  READ(envVal, *) elmerStart
+ELSE
+  elmerStart = 0
+END IF
+
+IF (useEOFComm) THEN
+  CALL MPI_COMM_SIZE(MPI_COMM_WORLD, globalPEs, ierr)
+  CALL MPI_COMM_RANK(MPI_COMM_WORLD, globalRank, ierr)
+
+  ALLOCATE(elmerRanks(0:nElmerRanks-1))
+  DO ii = 0, nElmerRanks-1
+    elmerRanks(ii) = elmerStart + ii
+  END DO
+
+  CALL MPI_COMM_GROUP(MPI_COMM_WORLD, worldGroup, ierr)
+  CALL MPI_GROUP_INCL(worldGroup, nElmerRanks, elmerRanks, elmerGroup, ierr)
+
+  CALL MPI_COMM_CREATE_GROUP(MPI_COMM_WORLD, elmerGroup, 0, ELMER_COMM_WORLD, ierr)
+
+  CALL MPI_GROUP_FREE(elmerGroup, ierr)
+  CALL MPI_GROUP_FREE(worldGroup, ierr)
+
+  DEALLOCATE(elmerRanks)
+ELSE
 #ifndef ELMER_COLOUR
 #define ELMER_COLOUR 0
 #endif
-      CALL MPI_COMM_SPLIT(MPI_COMM_WORLD,ELMER_COLOUR,&
-           ParEnv % MyPE,ELMER_COMM_WORLD,ierr) 
-    ENDIF
-#else
-    ! The colour could be set to be some different if we want to couple ElmerSolver with some other
-    ! software having MPI colour set to zero. 
-#ifndef ELMER_COLOUR
-#define ELMER_COLOUR 0
-#endif
-    CALL MPI_COMM_SPLIT(MPI_COMM_WORLD,ELMER_COLOUR,&
-         ParEnv % MyPE,ELMER_COMM_WORLD,ierr) 
-#endif  
-    ParEnv % ActiveComm = ELMER_COMM_WORLD
+  CALL MPI_COMM_SPLIT(MPI_COMM_WORLD, ELMER_COLOUR, ParEnv % MyPE, ELMER_COMM_WORLD, ierr)
+END IF
 
 !ELMER_COMM_WORLD=MPI_COMM_WORLD
 
